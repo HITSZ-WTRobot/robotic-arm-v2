@@ -64,3 +64,18 @@ startup_stm32*.s
 # OS-specific system files
 .DS_Store
 Thumbs.db
+
+
+# Python bytecode
+*.pyc
+
+# Logs
+*.log
+
+# Virtualenv
+venv/
+
+# Build
+build/
+dist/
+__pycache__/

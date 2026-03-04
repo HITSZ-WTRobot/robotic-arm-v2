@@ -94,4 +94,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         utils
         # Chassis::Mecanum4
         ArmController
+        ArmController::Slave
 )
