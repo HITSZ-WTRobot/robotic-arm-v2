@@ -7,6 +7,8 @@
 #include "device.hpp"
 #include "DM.hpp"
 #include "dma.h"
+#include "main.h"
+#include "stm32f4xx_hal_def.h"
 
 // Define global pointers
 motors::DMMotor*  motor_joint1  = nullptr;
@@ -45,28 +47,31 @@ void APP_Device_Init()
                                           .pos_max_rad = 12.5f,  // Example max position in radians
                                           .vel_max_rad = 25.0f,  // Example max velocity in rad/s
                                           .tor_max     = 200.0f, // Example max torque in Nm
-                                          .auto_zero   = true,
+                                          .auto_zero   = false,
                                           .reverse     = true,
                                           .reduction_rate = 1.0f };
     motor_joint1                      = new motors::DMMotor(dm_config);
+    motor_joint1->disable();
+    motor_joint1->ping();
 
     // Joint 2: DJI M3508
     motor_joint2 = new motors::DJIMotor({ .hcan      = &hcan1,
                                           .type      = motors::DJIMotor::Type::M3508_C620,
-                                          .id1       = 1,
+                                          .id1       = 2,
                                           .auto_zero = true,
                                           .reverse   = false });
 
     // Joint 3 (Gripper): DJI M3508
     motor_element = new motors::DJIMotor({ .hcan      = &hcan1,
                                            .type      = motors::DJIMotor::Type::M3508_C620,
-                                           .id1       = 2,
+                                           .id1       = 1,
                                            .auto_zero = true,
                                            .reverse   = true });
 
     // 3. Sensors
     // XGZP6847D: I2C1, Range 200.0f
-    // sensor_pressure = new sensors::pressure::XGZP6847D({ .hi2c = &hi2c1, .k = 32.0f, .b = 0.0f });
+    // sensor_pressure = new sensors::pressure::XGZP6847D({ .hi2c = &hi2c1, .k = 32.0f, .b = 0.0f
+    // });
 }
 
 void APP_Device_Update_1kHz()
@@ -76,13 +81,14 @@ void APP_Device_Update_1kHz()
     // but here we use ID 1 and 2, so Group 1 is enough.
     motors::DJIMotor::SendIqCommand(&hcan1, motors::DJIMotor::IqSetCMDGroup::IqCMDGroup_1_4);
     motors::DJIMotor::SendIqCommand(&hcan1, motors::DJIMotor::IqSetCMDGroup::IqCMDGroup_5_8);
+    motor_joint1->ping(); // 达妙电机的心跳包
 }
-
+bool m1_ok, m2_ok, m3_ok;
 bool APP_Device_isAllConnected()
 {
-    bool m1_ok = motor_joint1 && motor_joint1->isConnected();
-    bool m2_ok = motor_joint2 && motor_joint2->isConnected();
-    bool m3_ok = motor_element && motor_element->isConnected();
+    m1_ok = motor_joint1 && motor_joint1->isConnected();
+    m2_ok = motor_joint2 && motor_joint2->isConnected();
+    m3_ok = motor_element && motor_element->isConnected();
 
     return m1_ok && m2_ok && m3_ok;
 }
@@ -95,6 +101,7 @@ void APP_Device_WaitConnections()
         if (HAL_GetTick() - tick > 10000)
         {
             // Timeout
+            Error_Handler();
             break;
         }
         HAL_Delay(10);

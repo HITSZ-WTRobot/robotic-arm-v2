@@ -44,6 +44,9 @@ extern "C" void Init(void* argument)
     // HAL_TIM_RegisterCallback(&htim13, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback_200Hz);
     // HAL_TIM_Base_Start_IT(&htim13);
 
+    HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback_1kHz);
+    HAL_TIM_Base_Start_IT(&htim6);
+
     // 等待各设备连接
     APP_Device_WaitConnections();
 
@@ -52,11 +55,10 @@ extern "C" void Init(void* argument)
      */
 
     APP_ArmCtrl_Init();
-    // 启动定时器
-    HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback_1kHz);
-    HAL_TIM_Base_Start_IT(&htim6);
-
     osDelay(1000);
+    // 启动定时器
+    // HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback_1kHz);
+    // HAL_TIM_Base_Start_IT(&htim6);
 
     osEventFlagsSet(systemEventHandle, SYSTEM_INITIALIZED);
 

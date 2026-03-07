@@ -76,15 +76,23 @@ protected:
         last_vacuum_state = (frame.flags & kFlagVacuum) ? 1 : 0;
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, (GPIO_PinState) !last_vacuum_state);
 
+        bool payload = (frame.flags & 0x40) ? 1 : 0;
+        if (payload)
+        {
+            robot_arm->setPayload(0.6, 0.5);
+        }
+        else
+            robot_arm->setPayload(0.0, 0.0);
+
         return arm_slave->pushPoint(frame, HAL_GetTick());
     }
 };
 
 static PcTrajRx  pc_traj_rx_obj(kUartPcHandler);
 static PcTrajRx* pc_traj_rx = &pc_traj_rx_obj;
-UartRxSync_DefineCallback(pc_traj_rx)
+UartRxSync_DefineCallback(pc_traj_rx);
 
-        Arm::Controller::Config BuildArmConfig()
+Arm::Controller::Config BuildArmConfig()
 {
     Arm::Controller::Config cfg{};
     cfg.l1  = 0.346f;
@@ -103,12 +111,12 @@ UartRxSync_DefineCallback(pc_traj_rx)
     cfg.reduction_3 = 1.5f;
 
     cfg.offset_1 = 0.0f;
-    cfg.offset_2 = -164.0f;
-    cfg.offset_3 = 90.0f;
+    cfg.offset_2 = -165.7f;
+    cfg.offset_3 = 97.3f;
 
     cfg.backlash_1 = 0.0f;
-    cfg.backlash_2 = 6.0f;
-    cfg.backlash_3 = 3.0f;
+    cfg.backlash_2 = 11.4f;
+    cfg.backlash_3 = 9.5f;
     return cfg;
 }
 } // namespace
@@ -177,7 +185,7 @@ void StatusFeedbackTask(void* argument)
             float cur_dq1 = 0.0f;
             float cur_dq2 = 0.0f;
             float cur_dq3 = 0.0f;
-            robot_arm->getJointAngles(cur_q1, cur_q2, cur_q3);
+            robot_arm->getJointAnglesComp(cur_q1, cur_q2, cur_q3);
             robot_arm->getJointVelocities(cur_dq1, cur_dq2, cur_dq3);
 
             float pressure_kpa = 0.0f;
