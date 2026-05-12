@@ -79,3 +79,6 @@ venv/
 build/
 dist/
 __pycache__/
+/jdb.jdebug
+/jdb.jdebug.user
+/temp/
