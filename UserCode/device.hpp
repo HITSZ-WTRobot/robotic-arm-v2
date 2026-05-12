@@ -6,9 +6,10 @@
 #pragma once
 
 #include "DM.hpp"
+#include "I2CBusDMA.hpp"
+#include "I2CUpdateManager.hpp"
+#include "XGZP6847DDevice.hpp"
 #include "dji.hpp"
-// #include "motors/Unitree/Unitree.hpp"
-// #include "XGZP6847D.hpp"
 #include "can.h"
 #include "i2c.h"
 #include "usart.h"
@@ -19,13 +20,18 @@ extern motors::DMMotor *motor_joint1;
 // Joint 2: DJI M3508 (CAN1)
 extern motors::DJIMotor *motor_joint2;
 
-// Joint 3 (Gripper): DJI M3508 (CAN1)
-extern motors::DJIMotor *motor_element; // Element/Gripper
+// Joint 3 (Gripper): DM J4310 (CAN2)
+extern motors::DMMotor *motor_element; // Element/Gripper
+
+// I2C 总线与更新管理器
+extern I2CBusDMA *i2c_bus_1;
+extern I2CUpdateManager *i2c_manager_1;
 
 // Pressure Sensor
-// extern sensors::pressure::XGZP6847D *sensor_pressure;
+extern XGZP6847DDevice *sensor_pressure;
 
 void APP_Device_Init();
 void APP_Device_Update_1kHz();
 bool APP_Device_isAllConnected();
 void APP_Device_WaitConnections();
+float APP_Device_GetPressureKpa();

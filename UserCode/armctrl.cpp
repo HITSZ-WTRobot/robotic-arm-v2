@@ -1,6 +1,7 @@
 #include "armctrl.hpp"
 
 #include "arm_controller.hpp"
+#include "arm_motor_mit.hpp"
 #include "arm_slave.hpp"
 #include "cmsis_os2.h"
 #include "device.hpp"
@@ -15,13 +16,13 @@
 namespace
 {
 constexpr float kRatio2 = (3591.0f / (187.0f * 100.0f)) * (16384.0f / (20.0f * 0.3f));
-constexpr float kRatio3 = 16384.0f / (20.0f * 0.3f);
+// constexpr float kRatio3 = 16384.0f / (20.0f * 0.3f);
 
-Arm::MotorCtrl*  joint1_motor = nullptr;
-Arm::MotorCtrl*  joint2_motor = nullptr;
-Arm::MotorCtrl*  joint3_motor = nullptr;
-Arm::Controller* robot_arm    = nullptr;
-Arm::Slave*      arm_slave    = nullptr;
+Arm::MITMotorCtrl* joint1_motor = nullptr;
+Arm::MITMotorCtrl* joint2_motor = nullptr;
+Arm::MITMotorCtrl* joint3_motor = nullptr;
+Arm::Controller*   robot_arm    = nullptr;
+Arm::Slave*        arm_slave    = nullptr;
 
 constexpr UART_HandleTypeDef* kUartPcHandler = &huart1;
 
@@ -47,6 +48,20 @@ struct __attribute__((packed)) FeedbackFrame // 返回帧定义
     float    pressure_kpa;
 };
 
+/**
+ * PC Trajectory Receiver:
+ * - 接收来自上位机的轨迹点，解析后通过 `arm_slave` 下发给控制器。
+ * - 还负责控制末端吸盘的开关（通过 GPIOA PIN6）。
+ *
+ * 帧结构（共 29 字节）：
+ * - SOF (2 bytes): 0x55AA
+ * - q1, q2, q3 (4 bytes each): 目标关节角度，单位为度
+ * - dq1, dq2, dq3 (4 bytes each): 目标关节角速度，单位为度/s
+ * - flags (1 byte): 位0-吸盘状态（1=吸住），位6-负载状态（1=有负载）
+ *
+ * 注意：这个模块直接操作全局指针 `arm_slave` 和 `robot_arm`，
+ * 因此必须确保它们在使用前已经正确初始化。
+ */
 class PcTrajRx final : public protocol::UartRxSync<2, kTrajFrameLen>
 {
 public:
@@ -74,7 +89,8 @@ protected:
         }
 
         last_vacuum_state = (frame.flags & kFlagVacuum) ? 1 : 0;
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, (GPIO_PinState) !last_vacuum_state);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, static_cast<GPIO_PinState>(!last_vacuum_state));
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, static_cast<GPIO_PinState>(!last_vacuum_state));
 
         bool payload = (frame.flags & 0x40) ? 1 : 0;
         if (payload)
@@ -95,28 +111,28 @@ UartRxSync_DefineCallback(pc_traj_rx);
 Arm::Controller::Config BuildArmConfig()
 {
     Arm::Controller::Config cfg{};
-    cfg.l1  = 0.346f;
-    cfg.l2  = 0.382f;
-    cfg.l3  = 0.093f;
-    cfg.lc1 = 0.171f;
-    cfg.lc2 = 0.23769f;
-    cfg.lc3 = 0.057f;
-    cfg.m1  = 1.2243f;
-    cfg.m2  = 0.909f;
-    cfg.m3  = 0.6764f;
+    cfg.l1  = 0.340f;
+    cfg.l2  = 0.380f;
+    cfg.l3  = 0.1395f;
+    cfg.lc1 = 0.2542f;
+    cfg.lc2 = 0.28439f;
+    cfg.lc3 = 0.0775f;
+    cfg.m1  = 0.766f;
+    cfg.m2  = 0.616f;
+    cfg.m3  = 0.248f;
     cfg.g   = 9.81f;
 
     cfg.reduction_1 = 1.0f;
-    cfg.reduction_2 = 100.0f * 187.0f * 1.5f / 3591.0f;
-    cfg.reduction_3 = 1.5f;
+    cfg.reduction_2 = 100.0f * 187.0f / 3591.0f;
+    cfg.reduction_3 = 1.0f;
 
     cfg.offset_1 = 0.0f;
-    cfg.offset_2 = -165.7f;
-    cfg.offset_3 = 97.3f;
+    cfg.offset_2 = -163.87f;
+    cfg.offset_3 = 0.0f;
 
     cfg.backlash_1 = 0.0f;
-    cfg.backlash_2 = 11.4f;
-    cfg.backlash_3 = 9.5f;
+    cfg.backlash_2 = 4.0f;
+    cfg.backlash_3 = 0.0f;
     return cfg;
 }
 } // namespace
@@ -128,13 +144,13 @@ void APP_ArmCtrl_BeforeUpdate()
     if (motor_joint1 == nullptr || motor_joint2 == nullptr || motor_element == nullptr)
         return;
 
-    static Arm::MotorCtrl m1(motor_joint1);
-    static Arm::MotorCtrl m2(motor_joint2, kRatio2);
-    static Arm::MotorCtrl m3(motor_element, kRatio3);
+    static Arm::DMMITMotorCtrl  m1(motor_joint1);
+    static Arm::DJIMITMotorCtrl m2(motor_joint2, kRatio2);
+    static Arm::DMMITMotorCtrl  m3(motor_element);
 
-    m1.SetMitParams(150.0f, 3.5f, 0.0f, 2.0f);
+    m1.SetMitParams(400.0f, 18.0f, 0.0f, 2.0f);
     m2.SetMitParams(0.8f, 0.03f, 0.01f, 1.0f);
-    m3.SetMitParams(0.6f, 0.03f, 0.01f, 2.0f);
+    m3.SetMitParams(40.0f, 3.5f, 0.0f, 2.0f);
 
     joint1_motor = &m1;
     joint2_motor = &m2;
@@ -188,12 +204,7 @@ void StatusFeedbackTask(void* argument)
             robot_arm->getJointAnglesComp(cur_q1, cur_q2, cur_q3);
             robot_arm->getJointVelocities(cur_dq1, cur_dq2, cur_dq3);
 
-            float pressure_kpa = 0.0f;
-            // if (sensor_pressure != nullptr)
-            // {
-            //     sensor_pressure->update();
-            //     pressure_kpa = sensor_pressure->getPressure() / 1000.0f;
-            // }
+            const float pressure_kpa = APP_Device_GetPressureKpa();
 
             FeedbackFrame frame{};
             frame.sof          = kSof;

@@ -12,7 +12,6 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
-
 # Define the build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
@@ -90,7 +89,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         SensorOPS::ActionOPS
         SensorLaser::STP23L
         SensorLaser::DT35
-        # SensorPressure::XGZP6847D
+        SensorPressure::XGZP6847D
+        services::I2CUpdateManager
         utils
         # Chassis::Mecanum4
         ArmController

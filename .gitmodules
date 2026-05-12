@@ -13,3 +13,6 @@
 [submodule "Modules/VelocityProfile"]
 	path = Modules/VelocityProfile
 	url = git@github.com:HITSZ-WTRobot-Packages/VelocityProfile.git
+[submodule "Modules/ArmController"]
+	path = Modules/ArmController
+	url = git@github.com:HITSZ-WTRobot-Packages/ArmController.git

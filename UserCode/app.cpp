@@ -47,6 +47,12 @@ extern "C" void Init(void* argument)
     HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback_1kHz);
     HAL_TIM_Base_Start_IT(&htim6);
 
+    motor_joint1->ping(); // 达妙电机的心跳包
+    motor_element->ping();
+    osDelay(10);
+    motor_joint1->ping(); // 达妙电机的心跳包
+    motor_element->ping();
+    osDelay(10);
     // 等待各设备连接
     APP_Device_WaitConnections();
 
@@ -54,6 +60,7 @@ extern "C" void Init(void* argument)
      * 等待各种东西更新
      */
 
+    osDelay(1000);
     APP_ArmCtrl_Init();
     osDelay(1000);
     // 启动定时器
