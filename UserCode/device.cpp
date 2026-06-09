@@ -83,7 +83,7 @@ void APP_Device_Init()
 
     // 3. Sensors
     // XGZP6847D: I2C1, 量程 200.0 kPa
-    static I2CBusDMA        i2c1_bus(&hi2c1);
+    static I2CBusDMA i2c1_bus(&hi2c1, { GPIOB, GPIO_PIN_8, GPIOB, GPIO_PIN_9, GPIO_AF4_I2C1 });
     static I2CUpdateManager i2c_manager(i2c1_bus);
     static XGZP6847DDevice  pressure_sensor(300.0f);
 
