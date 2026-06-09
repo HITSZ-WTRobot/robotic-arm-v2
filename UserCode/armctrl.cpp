@@ -5,7 +5,6 @@
 #include "arm_slave.hpp"
 #include "cmsis_os2.h"
 #include "device.hpp"
-#include "gpio.h"
 #include "usart.h"
 #include "UartRxSync.hpp"
 
@@ -27,11 +26,9 @@ Arm::Slave*        arm_slave    = nullptr;
 constexpr UART_HandleTypeDef* kUartPcHandler = &huart1;
 
 constexpr uint16_t kSof          = 0xAA55;
-constexpr uint8_t  kFlagVacuum   = 0x80;
-constexpr uint8_t  kTrajFrameLen = 2 + 2 + 24 + 1;
+constexpr uint8_t  kTrajFrameLen = 2 + 2 + 36 + 1;
 
-static bool    traj_base_valid   = false;
-static uint8_t last_vacuum_state = 0;
+static bool traj_base_valid = false;
 
 static_assert(sizeof(Arm::Slave::TrajPoint) >= (kTrajFrameLen - 2),
               "TrajPoint is smaller than payload");
@@ -51,13 +48,15 @@ struct __attribute__((packed)) FeedbackFrame // 返回帧定义
 /**
  * PC Trajectory Receiver:
  * - 接收来自上位机的轨迹点，解析后通过 `arm_slave` 下发给控制器。
- * - 还负责控制末端吸盘的开关（通过 GPIOA PIN6）。
+ * - flags 随轨迹点进入队列，在轨迹点实际执行时生效。
  *
- * 帧结构（共 29 字节）：
+ * 帧结构（共 41 字节）：
  * - SOF (2 bytes): 0x55AA
+ * - index (2 bytes): 轨迹点序号
  * - q1, q2, q3 (4 bytes each): 目标关节角度，单位为度
  * - dq1, dq2, dq3 (4 bytes each): 目标关节角速度，单位为度/s
- * - flags (1 byte): 位0-吸盘状态（1=吸住），位6-负载状态（1=有负载）
+ * - ddq1, ddq2, ddq3 (4 bytes each): 目标关节角加速度，单位为度/s^2
+ * - flags (1 byte): bit7-吸盘状态，bit6-末端补偿状态
  *
  * 注意：这个模块直接操作全局指针 `arm_slave` 和 `robot_arm`，
  * 因此必须确保它们在使用前已经正确初始化。
@@ -88,18 +87,6 @@ protected:
             traj_base_valid = true;
         }
 
-        last_vacuum_state = (frame.flags & kFlagVacuum) ? 1 : 0;
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, static_cast<GPIO_PinState>(!last_vacuum_state));
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, static_cast<GPIO_PinState>(!last_vacuum_state));
-
-        bool payload = (frame.flags & 0x40) ? 1 : 0;
-        if (payload)
-        {
-            robot_arm->setPayload(0.6, 0.5);
-        }
-        else
-            robot_arm->setPayload(0.0, 0.0);
-
         return arm_slave->pushPoint(frame, HAL_GetTick());
     }
 };
@@ -115,12 +102,21 @@ Arm::Controller::Config BuildArmConfig()
     cfg.l2  = 0.380f;
     cfg.l3  = 0.1395f;
     cfg.lc1 = 0.2542f;
-    cfg.lc2 = 0.28439f;
+    cfg.lc2 = 0.270231f;
     cfg.lc3 = 0.0775f;
     cfg.m1  = 0.766f;
-    cfg.m2  = 0.616f;
+    cfg.m2  = 0.653f;
     cfg.m3  = 0.248f;
-    cfg.g   = 9.81f;
+
+    cfg.I1 = 0.007423397f;
+    cfg.I2 = 0.014041039f;
+    cfg.I3 = 0.000279927f;
+
+    cfg.m_payload  = 0.6;
+    cfg.lc_payload = 0.175;
+    cfg.I_payload  = 0.012217;
+
+    cfg.g = 9.81f;
 
     cfg.reduction_1 = 1.0f;
     cfg.reduction_2 = 100.0f * 187.0f / 3591.0f;
@@ -131,7 +127,7 @@ Arm::Controller::Config BuildArmConfig()
     cfg.offset_3 = 0.0f;
 
     cfg.backlash_1 = 0.0f;
-    cfg.backlash_2 = 4.0f;
+    cfg.backlash_2 = 7.0f;
     cfg.backlash_3 = 0.0f;
     return cfg;
 }
@@ -148,7 +144,7 @@ void APP_ArmCtrl_BeforeUpdate()
     static Arm::DJIMITMotorCtrl m2(motor_joint2, kRatio2);
     static Arm::DMMITMotorCtrl  m3(motor_element);
 
-    m1.SetMitParams(400.0f, 18.0f, 0.0f, 2.0f);
+    m1.SetMitParams(300.0f, 18.0f, 0.0f, 2.0f);
     m2.SetMitParams(0.8f, 0.03f, 0.01f, 1.0f);
     m3.SetMitParams(40.0f, 3.5f, 0.0f, 2.0f);
 
