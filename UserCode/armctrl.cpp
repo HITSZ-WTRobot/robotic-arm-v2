@@ -4,16 +4,17 @@
 #include "arm_motor_mit.hpp"
 #include "arm_slave.hpp"
 #include "cmsis_os2.h"
+#include "crc.hpp"
 #include "device.hpp"
 #include "usart.h"
 #include "UartRxSync.hpp"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cstdint>
 
-namespace
-{
 constexpr float kRatio2 = (3591.0f / (187.0f * 100.0f)) * (16384.0f / (20.0f * 0.3f));
 // constexpr float kRatio3 = 16384.0f / (20.0f * 0.3f);
 
@@ -24,14 +25,20 @@ Arm::Controller*   robot_arm    = nullptr;
 Arm::Slave*        arm_slave    = nullptr;
 
 constexpr UART_HandleTypeDef* kUartPcHandler = &huart1;
+using CRC16Modbus                            = crc::CRCX<16, 0x8005, 0xFFFF, true, true, 0x0000>;
 
-constexpr uint16_t kSof          = 0xAA55;
-constexpr uint8_t  kTrajFrameLen = 2 + 2 + 36 + 1;
+constexpr uint16_t kSof = 0xAA55;
+constexpr size_t   kDebugTrajFrameLen = 43;
 
 static bool traj_base_valid = false;
 
-static_assert(sizeof(Arm::Slave::TrajPoint) >= (kTrajFrameLen - 2),
-              "TrajPoint is smaller than payload");
+struct __attribute__((packed)) TrajRxFrame
+{
+    uint16_t              sof;
+    Arm::Slave::TrajPoint point;
+    uint16_t              crc16;
+};
+
 
 struct __attribute__((packed)) FeedbackFrame // 返回帧定义
 {
@@ -43,7 +50,66 @@ struct __attribute__((packed)) FeedbackFrame // 返回帧定义
     float    dq2;
     float    dq3;
     float    pressure_kpa;
+    uint16_t crc16;
 };
+
+constexpr size_t kTrajPayloadLen = sizeof(Arm::Slave::TrajPoint);
+constexpr size_t kTrajFrameLen   = sizeof(TrajRxFrame);
+
+static_assert(kTrajPayloadLen == 39, "Unexpected TrajPoint size");
+static_assert(sizeof(TrajRxFrame) == sizeof(uint16_t) + kTrajPayloadLen + sizeof(uint16_t),
+              "Unexpected trajectory frame size");
+static_assert(sizeof(FeedbackFrame) == 32, "Unexpected feedback frame size");
+
+static uint16_t ReadLE16(const uint8_t* data)
+{
+    return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
+}
+
+extern "C"
+{
+volatile uint32_t g_pc_traj_rx_count          = 0;
+volatile uint32_t g_pc_traj_decode_ok_count   = 0;
+volatile uint32_t g_pc_traj_crc_fail_count    = 0;
+volatile uint32_t g_pc_traj_push_fail_count   = 0;
+volatile uint32_t g_pc_traj_last_tick_ms      = 0;
+volatile uint16_t g_pc_traj_last_crc_rx       = 0;
+volatile uint16_t g_pc_traj_last_crc_expected = 0;
+volatile uint16_t g_pc_traj_last_index        = 0;
+volatile uint8_t  g_pc_traj_last_flags        = 0;
+volatile uint8_t  g_pc_traj_last_decode_ok    = 0;
+volatile uint8_t  g_pc_traj_last_frame[kDebugTrajFrameLen] = {};
+volatile float    g_pc_traj_last_q1           = 0.0f;
+volatile float    g_pc_traj_last_q2           = 0.0f;
+volatile float    g_pc_traj_last_q3           = 0.0f;
+volatile float    g_pc_traj_last_dq1          = 0.0f;
+volatile float    g_pc_traj_last_dq2          = 0.0f;
+volatile float    g_pc_traj_last_dq3          = 0.0f;
+volatile float    g_pc_traj_last_ddq1         = 0.0f;
+volatile float    g_pc_traj_last_ddq2         = 0.0f;
+volatile float    g_pc_traj_last_ddq3         = 0.0f;
+}
+
+static void DebugStoreLastFrame(const uint8_t* data)
+{
+    for (size_t i = 0; i < kTrajFrameLen && i < kDebugTrajFrameLen; ++i)
+        g_pc_traj_last_frame[i] = data[i];
+}
+
+static void DebugStoreLastPoint(const Arm::Slave::TrajPoint& point)
+{
+    g_pc_traj_last_index = point.index;
+    g_pc_traj_last_q1    = point.q1;
+    g_pc_traj_last_q2    = point.q2;
+    g_pc_traj_last_q3    = point.q3;
+    g_pc_traj_last_dq1   = point.dq1;
+    g_pc_traj_last_dq2   = point.dq2;
+    g_pc_traj_last_dq3   = point.dq3;
+    g_pc_traj_last_ddq1  = point.ddq1;
+    g_pc_traj_last_ddq2  = point.ddq2;
+    g_pc_traj_last_ddq3  = point.ddq3;
+    g_pc_traj_last_flags = point.flags;
+}
 
 /**
  * PC Trajectory Receiver:
@@ -61,7 +127,7 @@ struct __attribute__((packed)) FeedbackFrame // 返回帧定义
  * 注意：这个模块直接操作全局指针 `arm_slave` 和 `robot_arm`，
  * 因此必须确保它们在使用前已经正确初始化。
  */
-class PcTrajRx final : public protocol::UartRxSync<2, kTrajFrameLen>
+class PcTrajRx final : public protocol::UartRxSync<2, kTrajFrameLen, true>
 {
 public:
     explicit PcTrajRx(UART_HandleTypeDef* huart) : UartRxSync(huart) {}
@@ -73,43 +139,73 @@ protected:
         return kHeader;
     }
 
-    bool decode(const uint8_t data[kTrajFrameLen - 2]) override
+    bool decode(const uint8_t data[kTrajFrameLen]) override
     {
-        Arm::Slave::TrajPoint frame{};
-        std::memcpy(&frame, data, kTrajFrameLen - 2);
+        ++g_pc_traj_rx_count;
+        g_pc_traj_last_tick_ms = HAL_GetTick();
+        DebugStoreLastFrame(data);
+
+        const uint16_t rx_crc       = ReadLE16(data + kTrajFrameLen - sizeof(uint16_t));
+        const uint16_t expected_crc = CRC16Modbus::calc(data, kTrajFrameLen - sizeof(uint16_t));
+        g_pc_traj_last_crc_rx       = rx_crc;
+        g_pc_traj_last_crc_expected = expected_crc;
+        if (rx_crc != expected_crc)
+        {
+            ++g_pc_traj_crc_fail_count;
+            g_pc_traj_last_decode_ok = 0;
+            return false;
+        }
+
+        TrajRxFrame frame{};
+        std::memcpy(&frame, data, sizeof(frame));
+        DebugStoreLastPoint(frame.point);
 
         if (arm_slave == nullptr)
+        {
+            g_pc_traj_last_decode_ok = 0;
             return false;
+        }
 
-        if (frame.index == 0 || !traj_base_valid)
+        if (frame.point.index == 0 || !traj_base_valid)
         {
             arm_slave->clear();
             traj_base_valid = true;
         }
 
-        return arm_slave->pushPoint(frame, HAL_GetTick());
+        const bool ok = arm_slave->pushPoint(frame.point, HAL_GetTick());
+        if (ok)
+        {
+            ++g_pc_traj_decode_ok_count;
+            g_pc_traj_last_decode_ok = 1;
+        }
+        else
+        {
+            ++g_pc_traj_push_fail_count;
+            g_pc_traj_last_decode_ok = 0;
+        }
+        return ok;
     }
 };
 
-static PcTrajRx  pc_traj_rx_obj(kUartPcHandler);
-static PcTrajRx* pc_traj_rx = &pc_traj_rx_obj;
+ PcTrajRx  pc_traj_rx_obj(kUartPcHandler);
+ PcTrajRx* pc_traj_rx = &pc_traj_rx_obj;
 UartRxSync_DefineCallback(pc_traj_rx);
 
 Arm::Controller::Config BuildArmConfig()
 {
     Arm::Controller::Config cfg{};
-    cfg.l1  = 0.340f;
+    cfg.l1  = 0.360f;
     cfg.l2  = 0.380f;
     cfg.l3  = 0.1395f;
-    cfg.lc1 = 0.2542f;
+    cfg.lc1 = 0.290f;
     cfg.lc2 = 0.270231f;
     cfg.lc3 = 0.0775f;
-    cfg.m1  = 0.766f;
-    cfg.m2  = 0.653f;
+    cfg.m1  = 0.708f;
+    cfg.m2  = 0.498f;
     cfg.m3  = 0.248f;
 
-    cfg.I1 = 0.007423397f;
-    cfg.I2 = 0.014041039f;
+    cfg.I1 = 0.006193425f;
+    cfg.I2 = 0.008844550f;
     cfg.I3 = 0.000279927f;
 
     cfg.m_payload  = 0.6;
@@ -123,7 +219,7 @@ Arm::Controller::Config BuildArmConfig()
     cfg.reduction_3 = 1.0f;
 
     cfg.offset_1 = 0.0f;
-    cfg.offset_2 = -163.87f;
+    cfg.offset_2 = -165.73f;
     cfg.offset_3 = 0.0f;
 
     cfg.backlash_1 = 0.0f;
@@ -131,7 +227,6 @@ Arm::Controller::Config BuildArmConfig()
     cfg.backlash_3 = 0.0f;
     return cfg;
 }
-} // namespace
 
 void APP_ArmCtrl_BeforeUpdate()
 {
@@ -202,7 +297,7 @@ void StatusFeedbackTask(void* argument)
 
             const float pressure_kpa = APP_Device_GetPressureKpa();
 
-            FeedbackFrame frame{};
+            static FeedbackFrame frame{};
             frame.sof          = kSof;
             frame.q1           = cur_q1;
             frame.q2           = cur_q2;
@@ -211,6 +306,8 @@ void StatusFeedbackTask(void* argument)
             frame.dq2          = cur_dq2;
             frame.dq3          = cur_dq3;
             frame.pressure_kpa = pressure_kpa;
+            frame.crc16        = CRC16Modbus::calc(reinterpret_cast<const uint8_t*>(&frame),
+                                                   sizeof(frame) - sizeof(frame.crc16));
 
             HAL_UART_Transmit_DMA(kUartPcHandler,
                                   reinterpret_cast<uint8_t*>(&frame),

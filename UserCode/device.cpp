@@ -55,7 +55,7 @@ void APP_Device_Init()
                                           .vel_max_rad = 25.0f,  // Example max velocity in rad/s
                                           .tor_max     = 200.0f, // Example max torque in Nm
                                           .auto_zero   = false,
-                                          .reverse     = false,
+                                          .reverse     = true,
                                           .reduction_rate = 1.0f };
     motor_joint1                      = new motors::DMMotor(dm_config);
     motor_joint1->disable();
@@ -66,7 +66,7 @@ void APP_Device_Init()
                                           .type      = motors::DJIMotor::Type::M3508_C620,
                                           .id1       = 1,
                                           .auto_zero = true,
-                                          .reverse   = false });
+                                          .reverse   = true });
 
     // Joint 3 (Gripper): DM J4310
     motors::DMMotor::Config dm_config_2 = { .hcan        = &hcan2,
@@ -77,7 +77,7 @@ void APP_Device_Init()
                                             .vel_max_rad = 25.0f, // Example max velocity in rad/s
                                             .tor_max     = 12.0f, // Example max torque in Nm
                                             .auto_zero   = false,
-                                            .reverse     = false,
+                                            .reverse     = true,
                                             .reduction_rate = 1.0f };
     motor_element                       = new motors::DMMotor(dm_config_2);
 
